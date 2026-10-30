@@ -1,0 +1,62 @@
+name: Build APK Kasir Toko
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ambil kode
+        uses: actions/checkout@v4
+
+      - name: Siapkan Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Siapkan Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Jalankan unit test
+        run: |
+          chmod +x gradlew
+          ./gradlew testReleaseUnitTest --stacktrace
+
+      - name: Build APK
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Siapkan file APK
+        run: cp app/build/outputs/apk/release/app-release.apk KasirToko-v1.0.${{ github.run_number }}.apk
+
+      - name: Unggah APK (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KasirToko-apk
+          path: KasirToko-*.apk
+
+      - name: Hasil tes (jika gagal)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: laporan-tes
+          path: app/build/reports/tests/
+
+      - name: Terbitkan rilis (APK bisa diunduh langsung dari HP)
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Kasir Toko v1.0.${{ github.run_number }}
+          body: |
+            APK Kasir Toko build #${{ github.run_number }}.
+            Unduh file `.apk` di bawah, buka di HP Android, lalu izinkan "Instal dari sumber ini".
+          files: KasirToko-*.apk
+          make_latest: true

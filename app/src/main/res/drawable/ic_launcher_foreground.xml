@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ikon: struk belanja dengan garis barcode -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,30h36a4,4 0,0 1,4 4v44l-6,-4 -6,4 -6,-4 -6,4 -6,-4 -6,4 -6,-4 -6,4V34a4,4 0,0 1,4 -4z" />
+    <path android:fillColor="#00695C" android:pathData="M40,40h3v20h-3z" />
+    <path android:fillColor="#00695C" android:pathData="M45,40h1.5v20h-1.5z" />
+    <path android:fillColor="#00695C" android:pathData="M48.5,40h3v20h-3z" />
+    <path android:fillColor="#00695C" android:pathData="M53.5,40h1.5v20h-1.5z" />
+    <path android:fillColor="#00695C" android:pathData="M57,40h4v20h-4z" />
+    <path android:fillColor="#00695C" android:pathData="M63,40h1.5v20h-1.5z" />
+    <path android:fillColor="#00695C" android:pathData="M66.5,40h1.5v20h-1.5z" />
+    <path android:fillColor="#F57C00" android:pathData="M38,49h32v2h-32z" />
+</vector>
