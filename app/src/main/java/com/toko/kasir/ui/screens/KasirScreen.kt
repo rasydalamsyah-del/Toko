@@ -1,28 +1,38 @@
 package com.toko.kasir.ui.screens
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
@@ -30,15 +40,21 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,20 +62,25 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.toko.kasir.data.CartItem
+import com.toko.kasir.data.PayMethod
 import com.toko.kasir.logic.CartLogic
 import com.toko.kasir.logic.Rupiah
 import com.toko.kasir.ui.TokoViewModel
 import com.toko.kasir.ui.components.EmptyState
 import com.toko.kasir.ui.components.NumberField
 import com.toko.kasir.ui.components.ProductDialog
+import com.toko.kasir.ui.components.rememberReceiptActions
 import com.toko.kasir.ui.scanner.BarcodeScannerView
 import com.toko.kasir.ui.scanner.CameraPermissionGate
+import kotlinx.coroutines.delay
 
 @Composable
 fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
@@ -67,6 +88,10 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     var query by rememberSaveable { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
     var newBarcode by remember { mutableStateOf<String?>(null) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var editQty by remember { mutableStateOf<CartItem?>(null) }
+    val listState = rememberLazyListState()
+    val receipt = rememberReceiptActions(vm)
 
     val cart = vm.cart
     val total = CartLogic.total(cart)
@@ -74,21 +99,61 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
         if (query.isBlank()) emptyList() else vm.products.filter { it.matches(query) }.take(6)
     }
     // Kamera dijeda saat ada dialog supaya tidak bentrok dengan kamera di dialog lain.
-    val dialogOpen = paying || newBarcode != null || vm.unknownBarcode != null || vm.lastSale != null
+    val dialogOpen = paying || newBarcode != null || vm.unknownBarcode != null ||
+        vm.lastSale != null || confirmClear || editQty != null
+
+    // Barang baru: gulir ke atas, sorot sebentar, lalu hilangkan sorotan.
+    val highlight = vm.highlight
+    LaunchedEffect(highlight) {
+        if (highlight != null) {
+            listState.animateScrollToItem(0)
+            delay(1800)
+            vm.clearHighlight(highlight)
+        }
+    }
 
     Column(modifier.fillMaxSize()) {
         if (showCamera) {
-            if (dialogOpen) {
-                Box(
-                    Modifier.fillMaxWidth().height(190.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Text("Kamera dijeda", color = MaterialTheme.colorScheme.outline) }
-            } else {
-                CameraPermissionGate(Modifier.fillMaxWidth().height(190.dp)) {
-                    BarcodeScannerView(
-                        modifier = Modifier.fillMaxSize(),
-                        onScanned = vm::onBarcodeScanned,
-                    )
+            Box(Modifier.fillMaxWidth().height(140.dp).clipToBounds()) {
+                if (dialogOpen) {
+                    Box(
+                        Modifier.fillMaxSize().background(Color(0xFF1B1B1B)),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("Kamera dijeda", color = Color.White.copy(alpha = 0.7f)) }
+                } else {
+                    CameraPermissionGate(Modifier.fillMaxSize()) {
+                        BarcodeScannerView(
+                            modifier = Modifier.fillMaxSize(),
+                            onScanned = vm::onBarcodeScanned,
+                        )
+                    }
+                }
+                if (highlight != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(8.dp)
+                            .widthIn(max = 280.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.CheckCircle, contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                " ${highlight.label}",
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -168,12 +233,34 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.weight(1f),
             )
         } else {
-            LazyColumn(Modifier.weight(1f)) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Keranjang · ${cart.size} barang",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { confirmClear = true }) {
+                    Icon(
+                        Icons.Filled.DeleteSweep, contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                    Text(" Kosongkan", color = MaterialTheme.colorScheme.error)
+                }
+            }
+            HorizontalDivider()
+            LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
                 items(cart, key = { it.product.id }) { item ->
                     CartRow(
                         item = item,
+                        highlighted = highlight?.productId == item.product.id,
                         onMinus = { vm.setQty(item.product.id, item.qty - 1) },
                         onPlus = { vm.setQty(item.product.id, item.qty + 1) },
+                        onQtyClick = { editQty = item },
                     )
                     HorizontalDivider()
                 }
@@ -182,7 +269,7 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
 
         Surface(tonalElevation = 3.dp, shadowElevation = 6.dp) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -197,11 +284,12 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
-                if (cart.isNotEmpty()) {
-                    TextButton(onClick = vm::clearCart) { Text("Kosongkan") }
-                }
-                Button(onClick = { paying = true }, enabled = cart.isNotEmpty()) {
-                    Text("Bayar")
+                Button(
+                    onClick = { paying = true },
+                    enabled = cart.isNotEmpty(),
+                    modifier = Modifier.height(48.dp),
+                ) {
+                    Text("Bayar", style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
@@ -210,8 +298,35 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     if (paying) {
         PaymentDialog(
             total = total,
+            vm = vm,
             onDismiss = { paying = false },
-            onConfirm = { paid -> vm.checkout(paid) { paying = false } },
+            onConfirm = { paid, method -> vm.checkout(paid, method) { paying = false } },
+        )
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Kosongkan keranjang?") },
+            text = { Text("${cart.size} barang di keranjang akan dihapus.") },
+            confirmButton = {
+                Button(onClick = {
+                    vm.clearCart()
+                    confirmClear = false
+                }) { Text("Kosongkan") }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Batal") } },
+        )
+    }
+
+    editQty?.let { item ->
+        QtyDialog(
+            item = item,
+            onDismiss = { editQty = null },
+            onSave = { qty ->
+                vm.setQty(item.product.id, qty)
+                editQty = null
+            },
         )
     }
 
@@ -249,9 +364,24 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     SummaryLine("Total", Rupiah.format(sale.total))
-                    SummaryLine("Dibayar", Rupiah.format(sale.paid))
-                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                    SummaryLine("Kembalian", Rupiah.format(sale.change), bold = true)
+                    SummaryLine("Dibayar (${sale.method.label})", Rupiah.format(sale.paid))
+                    if (sale.method == PayMethod.TUNAI) {
+                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        SummaryLine("Kembalian", Rupiah.format(sale.change), bold = true)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(onClick = { receipt.share(sale) }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text(" Bagikan")
+                        }
+                        OutlinedButton(onClick = { receipt.print(sale) }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Filled.Print, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text(" Cetak")
+                        }
+                    }
                 }
             },
             confirmButton = { Button(onClick = vm::dismissLastSale) { Text("Transaksi baru") } },
@@ -261,7 +391,7 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
 
 @Composable
 private fun SummaryLine(label: String, value: String, bold: Boolean = false) {
-    Row(Modifier.fillMaxWidth()) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f))
         Text(
             value,
@@ -272,77 +402,167 @@ private fun SummaryLine(label: String, value: String, bold: Boolean = false) {
 }
 
 @Composable
-private fun CartRow(item: CartItem, onMinus: () -> Unit, onPlus: () -> Unit) {
+private fun CartRow(
+    item: CartItem,
+    highlighted: Boolean,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+    onQtyClick: () -> Unit,
+) {
+    val bg by animateColorAsState(
+        if (highlighted) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        label = "sorot",
+    )
     Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        Modifier
+            .fillMaxWidth()
+            .background(bg)
+            .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(item.product.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
-                "${Rupiah.format(item.product.price)} × ${item.qty}",
+                "${Rupiah.format(item.product.price)} · ${Rupiah.format(item.subtotal)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(Rupiah.format(item.subtotal), fontWeight = FontWeight.SemiBold)
         }
         IconButton(onClick = onMinus) { Icon(Icons.Filled.Remove, contentDescription = "Kurangi") }
         Text(
             item.qty.toString(),
             style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.width(32.dp),
+            textAlign = TextAlign.Center,
             maxLines = 1,
+            modifier = Modifier
+                .widthIn(min = 44.dp)
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                .clickable(onClick = onQtyClick)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
         )
         IconButton(onClick = onPlus) { Icon(Icons.Filled.Add, contentDescription = "Tambah") }
     }
 }
 
 @Composable
-private fun PaymentDialog(total: Long, onDismiss: () -> Unit, onConfirm: (Long) -> Unit) {
+private fun QtyDialog(item: CartItem, onDismiss: () -> Unit, onSave: (Int) -> Unit) {
+    var text by remember { mutableStateOf(item.qty.toString()) }
+    val qty = text.toIntOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(item.product.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumberField(text, { text = it }, "Jumlah (${item.product.unit})")
+                Text(
+                    "Stok tersedia: ${item.product.stock} ${item.product.unit}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { qty?.let(onSave) }, enabled = qty != null) { Text("Simpan") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PaymentDialog(
+    total: Long,
+    vm: TokoViewModel,
+    onDismiss: () -> Unit,
+    onConfirm: (Long, PayMethod) -> Unit,
+) {
+    var method by remember { mutableStateOf(PayMethod.TUNAI) }
     var paidText by remember { mutableStateOf("") }
     val paid = Rupiah.parse(paidText)
     val change = CartLogic.change(total, paid)
+    val canPay = total > 0 && (method != PayMethod.TUNAI || change != null)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Pembayaran") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text("Total belanja", style = MaterialTheme.typography.labelMedium)
                 Text(
                     Rupiah.format(total),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                 )
-                NumberField(paidText, { paidText = it }, "Uang diterima", prefix = "Rp")
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    AssistChip(onClick = { paidText = total.toString() }, label = { Text("Uang pas") })
-                    CartLogic.cashSuggestions(total).forEach { v ->
-                        AssistChip(onClick = { paidText = v.toString() }, label = { Text(Rupiah.format(v)) })
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    PayMethod.entries.forEachIndexed { i, m ->
+                        SegmentedButton(
+                            selected = method == m,
+                            onClick = { method = m },
+                            shape = SegmentedButtonDefaults.itemShape(i, PayMethod.entries.size),
+                        ) { Text(m.label, maxLines = 1) }
                     }
                 }
-                Spacer(Modifier.height(4.dp))
-                if (paidText.isNotEmpty() && change == null) {
-                    Text(
-                        "Uang kurang ${Rupiah.format(total - paid)}",
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                } else if (change != null) {
-                    Text(
-                        "Kembalian ${Rupiah.format(change)}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                when (method) {
+                    PayMethod.TUNAI -> {
+                        NumberField(paidText, { paidText = it }, "Uang diterima", prefix = "Rp")
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            AssistChip(onClick = { paidText = total.toString() }, label = { Text("Uang pas") })
+                            CartLogic.cashSuggestions(total).forEach { v ->
+                                AssistChip(onClick = { paidText = v.toString() }, label = { Text(Rupiah.format(v)) })
+                            }
+                        }
+                        if (paidText.isNotEmpty() && change == null) {
+                            Text(
+                                "Uang kurang ${Rupiah.format(total - paid)}",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        } else if (change != null) {
+                            Text(
+                                "Kembalian ${Rupiah.format(change)}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    PayMethod.QRIS -> {
+                        val img = vm.qris
+                        if (img != null) {
+                            Image(
+                                img, contentDescription = "QRIS toko",
+                                modifier = Modifier.fillMaxWidth().height(240.dp),
+                            )
+                            Text(
+                                "Minta pembeli scan QRIS ini, lalu cek notifikasi dana masuk.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        } else {
+                            Text(
+                                "Gambar QRIS belum diatur. Tambahkan di menu Toko supaya bisa ditunjukkan ke pembeli.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    PayMethod.TRANSFER -> {
+                        Text(
+                            "Tekan Selesai setelah transfer masuk ke rekening toko.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(paid) }, enabled = change != null && total > 0) {
-                Text("Selesai")
+            Button(onClick = { onConfirm(paid, method) }, enabled = canPay) {
+                Text(if (method == PayMethod.TUNAI) "Selesai" else "Sudah dibayar")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },

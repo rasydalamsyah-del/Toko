@@ -47,6 +47,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -207,8 +208,9 @@ fun BarcodeScannerView(
         onDispose { beeper.release() }
     }
 
-    Box(modifier.background(Color.Black)) {
-        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+    // clipToBounds: gambar kamera tidak boleh meluber menutupi daftar barang di bawahnya.
+    Box(modifier.clipToBounds().background(Color.Black)) {
+        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize().clipToBounds())
         Box(
             Modifier
                 .align(Alignment.Center)
@@ -262,7 +264,7 @@ fun CameraPermissionGate(
         if (!granted) launcher.launch(Manifest.permission.CAMERA)
     }
 
-    Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+    Box(modifier.clipToBounds().background(Color.Black), contentAlignment = Alignment.Center) {
         if (granted) {
             content()
         } else {

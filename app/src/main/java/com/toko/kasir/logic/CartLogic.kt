@@ -15,11 +15,8 @@ object CartLogic {
         val existing = items.find { it.product.id == product.id }
         val newQty = (existing?.qty ?: 0) + qty
         if (newQty > product.stock) return CartResult.StokKurang(product, product.stock)
-        val updated = if (existing == null) {
-            items + CartItem(product, qty)
-        } else {
-            items.map { if (it.product.id == product.id) CartItem(product, newQty) else it }
-        }
+        // Barang yang baru discan selalu naik ke paling atas supaya langsung terlihat.
+        val updated = listOf(CartItem(product, newQty)) + items.filterNot { it.product.id == product.id }
         return CartResult.Ok(updated)
     }
 

@@ -20,6 +20,16 @@ data class CartItem(val product: Product, val qty: Int) {
     val subtotal: Long get() = product.price * qty
 }
 
+enum class PayMethod(val label: String) {
+    TUNAI("Tunai"),
+    QRIS("QRIS"),
+    TRANSFER("Transfer");
+
+    companion object {
+        fun of(name: String?): PayMethod = entries.firstOrNull { it.name == name } ?: TUNAI
+    }
+}
+
 data class Sale(
     val id: Long,
     val time: Long,
@@ -27,6 +37,8 @@ data class Sale(
     val paid: Long,
     val change: Long,
     val itemCount: Int,
+    val method: PayMethod = PayMethod.TUNAI,
+    val canceled: Boolean = false,
 )
 
 data class SaleItem(
@@ -43,12 +55,19 @@ data class Report(
     val omzet: Long,
     val laba: Long,
     val itemsSold: Int,
+    val count: Int,
     val sales: List<Sale>,
     val top: List<TopItem>,
+    val byMethod: List<Pair<PayMethod, Long>>,
 ) {
-    val count: Int get() = sales.size
-
     companion object {
-        val EMPTY = Report(0, 0, 0, emptyList(), emptyList())
+        val EMPTY = Report(0, 0, 0, 0, emptyList(), emptyList(), emptyList())
     }
 }
+
+data class StoreInfo(
+    val name: String = "Toko Saya",
+    val address: String = "",
+    val phone: String = "",
+    val footer: String = "Terima kasih, selamat belanja kembali",
+)

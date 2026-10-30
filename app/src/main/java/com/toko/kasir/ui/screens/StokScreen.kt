@@ -12,7 +12,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.OutlinedTextField
+import com.toko.kasir.ui.components.ScanDialog
 import androidx.compose.material.icons.filled.Warehouse
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -52,15 +57,17 @@ private enum class StokFilter(val label: String) { SEMUA("Semua"), MENIPIS("Meni
 @Composable
 fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     var filter by rememberSaveable { mutableStateOf(StokFilter.SEMUA) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
     var restock by remember { mutableStateOf<Product?>(null) }
     val products = vm.products
 
     val habis = products.count { it.stock <= 0 }
     val menipis = products.count { it.stock in 1..LOW_STOCK }
     val nilaiStok = products.sumOf { it.cost * it.stock.coerceAtLeast(0) }
-    val list = remember(products, filter) {
+    val list = remember(products, filter, query) {
         products.filter {
-            when (filter) {
+            it.matches(query) && when (filter) {
                 StokFilter.SEMUA -> true
                 StokFilter.MENIPIS -> it.stock in 1..LOW_STOCK
                 StokFilter.HABIS -> it.stock <= 0
@@ -70,6 +77,25 @@ fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
 
     LazyColumn(modifier.fillMaxSize()) {
         item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Cari atau scan barang untuk restok") },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Hapus pencarian")
+                        }
+                    } else {
+                        IconButton(onClick = { scanning = true }) {
+                            Icon(Icons.Filled.QrCodeScanner, contentDescription = "Scan barang")
+                        }
+                    }
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp),
+            )
             Row(
                 Modifier.fillMaxWidth().padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -125,6 +151,17 @@ fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                 HorizontalDivider()
             }
         }
+    }
+
+    if (scanning) {
+        ScanDialog(
+            onDismiss = { scanning = false },
+            onResult = { code ->
+                scanning = false
+                val found = products.firstOrNull { it.barcode == code }
+                if (found != null) restock = found else vm.show("Barcode $code belum terdaftar")
+            },
+        )
     }
 
     restock?.let { p ->

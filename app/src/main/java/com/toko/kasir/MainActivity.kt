@@ -4,11 +4,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.PointOfSale
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Warehouse
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -36,6 +40,7 @@ import com.toko.kasir.ui.screens.BarangScreen
 import com.toko.kasir.ui.screens.KasirScreen
 import com.toko.kasir.ui.screens.LaporanScreen
 import com.toko.kasir.ui.screens.StokScreen
+import com.toko.kasir.ui.screens.TokoScreen
 import com.toko.kasir.ui.theme.TokoTheme
 
 class MainActivity : ComponentActivity() {
@@ -55,9 +60,10 @@ private val tabs = listOf(
     Tab("Barang", Icons.Filled.Inventory2),
     Tab("Stok", Icons.Filled.Warehouse),
     Tab("Laporan", Icons.Filled.Assessment),
+    Tab("Toko", Icons.Filled.Storefront),
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TokoApp(vm: TokoViewModel = viewModel()) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -76,13 +82,16 @@ fun TokoApp(vm: TokoViewModel = viewModel()) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (tab == 0) "Kasir Toko" else tabs[tab].title) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            )
+            // Halaman Kasir tanpa judul supaya ruang keranjang lebih lega.
+            if (tab != 0) {
+                TopAppBar(
+                    title = { Text(tabs[tab].title) },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                )
+            }
         },
         bottomBar = {
             NavigationBar {
@@ -91,19 +100,24 @@ fun TokoApp(vm: TokoViewModel = viewModel()) {
                         selected = tab == i,
                         onClick = { tab = i },
                         icon = { Icon(t.icon, contentDescription = null) },
-                        label = { Text(t.title) },
+                        label = { Text(t.title, maxLines = 1) },
                     )
                 }
             }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        val m = Modifier.padding(padding)
+        // imePadding: saat keyboard muncul, isi layar naik sehingga tombol Bayar tidak tertutup.
+        val m = Modifier
+            .padding(padding)
+            .consumeWindowInsets(padding)
+            .imePadding()
         when (tab) {
             0 -> KasirScreen(vm, m)
             1 -> BarangScreen(vm, m)
             2 -> StokScreen(vm, m)
-            else -> LaporanScreen(vm, m)
+            3 -> LaporanScreen(vm, m)
+            else -> TokoScreen(vm, m)
         }
     }
 }

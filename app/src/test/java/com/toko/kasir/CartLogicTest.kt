@@ -36,6 +36,18 @@ class CartLogicTest {
     }
 
     @Test
+    fun barangTerakhirDiscanNaikKePalingAtas() {
+        var cart = ok(CartLogic.add(emptyList(), indomie))
+        cart = ok(CartLogic.add(cart, aqua))
+        assertEquals(2L, cart[0].product.id)
+        // Scan indomie lagi: naik ke atas dengan jumlah 2
+        cart = ok(CartLogic.add(cart, indomie))
+        assertEquals(1L, cart[0].product.id)
+        assertEquals(2, cart[0].qty)
+        assertEquals(2, cart.size)
+    }
+
+    @Test
     fun tidakBolehMelebihiStok() {
         var cart = ok(CartLogic.add(emptyList(), aqua))
         cart = ok(CartLogic.add(cart, aqua))

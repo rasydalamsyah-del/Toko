@@ -6,10 +6,11 @@ Aplikasi kasir Android (Kotlin + Jetpack Compose) untuk toko kecil, dengan scan 
 
 | Halaman | Isi |
 |---|---|
-| **Kasir** | Scan barcode dengan kamera (senter bisa dinyalakan), cari barang manual, atur jumlah, hitung total, uang diterima, dan kembalian. Barcode yang belum terdaftar bisa langsung ditambahkan. Mendukung scanner barcode USB/Bluetooth. |
+| **Kasir** | Scan barcode dengan kamera (senter bisa dinyalakan). Barang terakhir discan naik ke atas dan disorot. Jumlah bisa diketik langsung. Bayar tunai (hitung kembalian), QRIS (tampilkan QR toko), atau transfer. Struk bisa dibagikan ke WhatsApp atau dicetak ke printer Bluetooth. Mendukung scanner barcode USB/Bluetooth. |
 | **Barang** | Tambah, ubah, hapus barang: barcode, nama, harga jual, harga modal, stok, satuan. Cari pakai nama atau scan. |
-| **Stok** | Ringkasan barang menipis/habis, nilai stok, tombol +/− cepat, dan restok (tambah atau atur jumlah). |
-| **Laporan** | Omzet, laba kotor, jumlah transaksi, item terjual, barang terlaris, riwayat transaksi beserta detailnya. Filter hari ini / 7 hari / 30 hari / semua. |
+| **Stok** | Ringkasan barang menipis/habis, nilai stok, cari atau scan barang, tombol +/− cepat, restok (tambah atau atur jumlah). |
+| **Laporan** | Omzet, laba kotor, rincian per metode bayar, barang terlaris, riwayat transaksi. Transaksi bisa dibatalkan (stok kembali) dan struknya dicetak ulang. |
+| **Toko** | Info toko untuk struk, gambar QRIS, pilih printer, backup/pulihkan data, ekspor transaksi ke Excel (CSV). |
 
 Stok berkurang otomatis setiap transaksi. Semua data tersimpan di HP (SQLite), tanpa internet.
 

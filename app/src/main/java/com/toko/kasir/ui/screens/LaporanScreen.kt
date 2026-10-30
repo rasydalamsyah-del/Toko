@@ -9,19 +9,25 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Print
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.toko.kasir.data.Sale
@@ -41,11 +48,14 @@ import com.toko.kasir.logic.Waktu
 import com.toko.kasir.ui.TokoViewModel
 import com.toko.kasir.ui.components.EmptyState
 import com.toko.kasir.ui.components.StatCard
+import com.toko.kasir.ui.components.rememberReceiptActions
 
 @Composable
 fun LaporanScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     val report = vm.report
     var detail by remember { mutableStateOf<Sale?>(null) }
+    var confirmCancel by remember { mutableStateOf<Sale?>(null) }
+    val receipt = rememberReceiptActions(vm)
 
     LazyColumn(modifier.fillMaxSize()) {
         item {
@@ -80,11 +90,24 @@ fun LaporanScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                 StatCard("Transaksi", report.count.toString(), Modifier.weight(1f))
                 StatCard("Item terjual", report.itemsSold.toString(), Modifier.weight(1f))
             }
+            if (report.byMethod.isNotEmpty()) {
+                Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Per metode bayar", style = MaterialTheme.typography.labelMedium)
+                        report.byMethod.forEach { (m, sum) ->
+                            Row(Modifier.fillMaxWidth()) {
+                                Text(m.label, Modifier.weight(1f))
+                                Text(Rupiah.format(sum), fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            }
             Text(
-                "Laba kotor dihitung dari harga jual dikurangi harga modal.",
+                "Laba kotor = harga jual − harga modal. Transaksi batal tidak dihitung.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         }
 
@@ -125,12 +148,19 @@ fun LaporanScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                     Column(Modifier.weight(1f)) {
                         Text("#${s.id} · ${Waktu.lengkap(s.time)}")
                         Text(
-                            "${s.itemCount} item",
+                            if (s.canceled) "Dibatalkan" else "${s.itemCount} item · ${s.method.label}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (s.canceled) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Text(Rupiah.format(s.total), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        Rupiah.format(s.total),
+                        fontWeight = FontWeight.SemiBold,
+                        textDecoration = if (s.canceled) TextDecoration.LineThrough else null,
+                        color = if (s.canceled) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+                    )
                 }
                 HorizontalDivider()
             }
@@ -142,10 +172,10 @@ fun LaporanScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
         LaunchedEffect(sale.id) { saleItems = vm.saleItems(sale.id) }
         AlertDialog(
             onDismissRequest = { detail = null },
-            title = { Text("Transaksi #${sale.id}") },
+            title = { Text(if (sale.canceled) "Transaksi #${sale.id} (batal)" else "Transaksi #${sale.id}") },
             text = {
                 Column(
-                    Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(Waktu.lengkap(sale.time), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -163,11 +193,51 @@ fun LaporanScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                     }
                     HorizontalDivider()
                     DetailLine("Total", Rupiah.format(sale.total), bold = true)
-                    DetailLine("Dibayar", Rupiah.format(sale.paid))
-                    DetailLine("Kembalian", Rupiah.format(sale.change))
+                    DetailLine("Dibayar (${sale.method.label})", Rupiah.format(sale.paid))
+                    if (sale.change > 0) DetailLine("Kembalian", Rupiah.format(sale.change))
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(onClick = { receipt.share(sale) }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text(" Bagikan")
+                        }
+                        OutlinedButton(onClick = { receipt.print(sale) }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Filled.Print, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text(" Cetak")
+                        }
+                    }
+                    if (!sale.canceled) {
+                        TextButton(onClick = { confirmCancel = sale }) {
+                            Text("Batalkan transaksi", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
                 }
             },
             confirmButton = { Button(onClick = { detail = null }) { Text("Tutup") } },
+        )
+    }
+
+    confirmCancel?.let { sale ->
+        AlertDialog(
+            onDismissRequest = { confirmCancel = null },
+            title = { Text("Batalkan transaksi #${sale.id}?") },
+            text = {
+                Text(
+                    "Stok barang dikembalikan dan transaksi tidak dihitung di laporan. " +
+                        "Riwayatnya tetap tersimpan dengan tanda batal."
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    vm.cancelSale(sale) {
+                        confirmCancel = null
+                        detail = null
+                    }
+                }) { Text("Batalkan transaksi") }
+            },
+            dismissButton = { TextButton(onClick = { confirmCancel = null }) { Text("Kembali") } },
         )
     }
 }

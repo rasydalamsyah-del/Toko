@@ -30,4 +30,8 @@ object Waktu {
         SimpleDateFormat("dd MMM yyyy, HH:mm", locale).format(Date(ms))
 
     fun jam(ms: Long): String = SimpleDateFormat("HH:mm", locale).format(Date(ms))
+
+    fun struk(ms: Long): String = SimpleDateFormat("dd/MM/yy HH:mm", locale).format(Date(ms))
+
+    fun file(ms: Long): String = SimpleDateFormat("yyyy-MM-dd", locale).format(Date(ms))
 }

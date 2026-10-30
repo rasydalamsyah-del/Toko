@@ -4,6 +4,10 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.sqlite.SQLiteConstraintException
 import com.toko.kasir.logic.CartLogic
+import java.io.OutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class Repository(private val helper: DbHelper) {
 
@@ -72,10 +76,11 @@ class Repository(private val helper: DbHelper) {
     }
 
     /** Menyimpan transaksi dan mengurangi stok dalam satu transaksi database. */
-    fun checkout(items: List<CartItem>, paid: Long): Sale {
+    fun checkout(items: List<CartItem>, paid: Long, method: PayMethod): Sale {
         require(items.isNotEmpty()) { "Keranjang masih kosong" }
         val total = CartLogic.total(items)
-        require(paid >= total) { "Uang yang diterima kurang" }
+        val actualPaid = if (method == PayMethod.TUNAI) paid else total
+        require(actualPaid >= total) { "Uang yang diterima kurang" }
 
         val db = helper.writableDatabase
         db.beginTransaction()
@@ -94,8 +99,10 @@ class Repository(private val helper: DbHelper) {
             val saleId = db.insertOrThrow("sales", null, ContentValues().apply {
                 put("time", now)
                 put("total", total)
-                put("paid", paid)
-                put("change_amount", paid - total)
+                put("paid", actualPaid)
+                put("change_amount", actualPaid - total)
+                put("method", method.name)
+                put("status", 0)
             })
             for (ci in items) {
                 db.insertOrThrow("sale_items", null, ContentValues().apply {
@@ -112,7 +119,35 @@ class Repository(private val helper: DbHelper) {
                 )
             }
             db.setTransactionSuccessful()
-            return Sale(saleId, now, total, paid, paid - total, CartLogic.totalQty(items))
+            return Sale(
+                saleId, now, total, actualPaid, actualPaid - total,
+                CartLogic.totalQty(items), method, canceled = false,
+            )
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Membatalkan transaksi: status jadi batal dan stok barang dikembalikan. */
+    fun cancelSale(saleId: Long) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            val status = db.rawQuery(
+                "SELECT status FROM sales WHERE id = ?", arrayOf(saleId.toString())
+            ).use { c -> if (c.moveToFirst()) c.getInt(0) else null }
+                ?: throw IllegalStateException("Transaksi tidak ditemukan")
+            if (status != 0) throw IllegalStateException("Transaksi ini sudah dibatalkan")
+
+            db.execSQL(
+                """UPDATE products SET stock = stock +
+                     (SELECT COALESCE(SUM(si.qty), 0) FROM sale_items si
+                      WHERE si.sale_id = ? AND si.product_id = products.id)
+                   WHERE id IN (SELECT product_id FROM sale_items WHERE sale_id = ?)""",
+                arrayOf<Any>(saleId, saleId)
+            )
+            db.execSQL("UPDATE sales SET status = 1 WHERE id = ?", arrayOf<Any>(saleId))
+            db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
@@ -132,36 +167,87 @@ class Repository(private val helper: DbHelper) {
 
         val sales = db.rawQuery(
             """SELECT s.id, s.time, s.total, s.paid, s.change_amount,
-                  (SELECT COALESCE(SUM(qty), 0) FROM sale_items WHERE sale_id = s.id)
+                  (SELECT COALESCE(SUM(qty), 0) FROM sale_items WHERE sale_id = s.id),
+                  s.method, s.status
                FROM sales s WHERE s.time >= ? ORDER BY s.time DESC""",
             args
         ).use { c ->
             buildList {
                 while (c.moveToNext()) {
-                    add(Sale(c.getLong(0), c.getLong(1), c.getLong(2), c.getLong(3), c.getLong(4), c.getInt(5)))
+                    add(
+                        Sale(
+                            id = c.getLong(0), time = c.getLong(1), total = c.getLong(2),
+                            paid = c.getLong(3), change = c.getLong(4), itemCount = c.getInt(5),
+                            method = PayMethod.of(c.getString(6)), canceled = c.getInt(7) != 0,
+                        )
+                    )
                 }
             }
         }
 
         val (laba, sold) = db.rawQuery(
             """SELECT COALESCE(SUM((si.price - si.cost) * si.qty), 0), COALESCE(SUM(si.qty), 0)
-               FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.time >= ?""",
+               FROM sale_items si JOIN sales s ON s.id = si.sale_id
+               WHERE s.time >= ? AND s.status = 0""",
             args
         ).use { c -> if (c.moveToFirst()) c.getLong(0) to c.getInt(1) else 0L to 0 }
 
         val top = db.rawQuery(
             """SELECT si.name, SUM(si.qty) AS q
                FROM sale_items si JOIN sales s ON s.id = si.sale_id
-               WHERE s.time >= ? GROUP BY si.product_id, si.name ORDER BY q DESC LIMIT 5""",
+               WHERE s.time >= ? AND s.status = 0
+               GROUP BY si.product_id, si.name ORDER BY q DESC LIMIT 5""",
             args
         ).use { c -> buildList { while (c.moveToNext()) add(TopItem(c.getString(0), c.getInt(1))) } }
 
+        val valid = sales.filterNot { it.canceled }
+        val byMethod = PayMethod.entries.mapNotNull { m ->
+            val sum = valid.filter { it.method == m }.sumOf { it.total }
+            if (sum > 0) m to sum else null
+        }
+
         return Report(
-            omzet = sales.sumOf { it.total },
+            omzet = valid.sumOf { it.total },
             laba = laba,
             itemsSold = sold,
+            count = valid.size,
             sales = sales,
             top = top,
+            byMethod = byMethod,
         )
+    }
+
+    /** Ekspor semua transaksi ke CSV (dipisah titik koma, terbaca di Excel Indonesia). */
+    fun exportCsv(out: OutputStream) {
+        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        fun esc(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
+        out.bufferedWriter(Charsets.UTF_8).use { w ->
+            w.write("sep=;\n")
+            w.write("No;Waktu;Metode;Status;Barang;Jumlah;Harga;Subtotal;Total transaksi\n")
+            helper.readableDatabase.rawQuery(
+                """SELECT s.id, s.time, s.method, s.status, si.name, si.qty, si.price, s.total
+                   FROM sales s JOIN sale_items si ON si.sale_id = s.id
+                   ORDER BY s.time, si.id""",
+                null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val qty = c.getInt(5)
+                    val price = c.getLong(6)
+                    w.write(
+                        listOf(
+                            c.getLong(0).toString(),
+                            fmt.format(Date(c.getLong(1))),
+                            PayMethod.of(c.getString(2)).label,
+                            if (c.getInt(3) != 0) "Dibatalkan" else "Sah",
+                            esc(c.getString(4)),
+                            qty.toString(),
+                            price.toString(),
+                            (price * qty).toString(),
+                            c.getLong(7).toString(),
+                        ).joinToString(";") + "\n"
+                    )
+                }
+            }
+        }
     }
 }
