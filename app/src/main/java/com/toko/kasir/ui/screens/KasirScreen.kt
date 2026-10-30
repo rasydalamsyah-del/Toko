@@ -185,7 +185,7 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                     // Juga mendukung scanner barcode USB/Bluetooth yang mengetik + Enter.
                     val q = query.trim()
                     val exact = vm.products.any { p ->
-                        (p.barcode.isNotEmpty() && p.barcode == q) || p.units.any { it.barcode == q }
+                        p.allBarcodes.any { (c, _) -> c == q }
                     }
                     when {
                         q.isEmpty() -> Unit
@@ -373,7 +373,20 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
         AlertDialog(
             onDismissRequest = vm::dismissUnknownBarcode,
             title = { Text("Barang belum terdaftar") },
-            text = { Text("Barcode $code belum ada di daftar barang. Tambahkan sekarang?") },
+            text = {
+                val hit = vm.lookupKatalog(code)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Barcode $code belum ada di daftar barang. Tambahkan sekarang?")
+                    if (hit != null) {
+                        Text(
+                            "Di katalog: ${hit.names.first()}" +
+                                if (hit.price > 0) " (harga saran ${Rupiah.format(hit.price)})" else "",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
+            },
             confirmButton = {
                 Button(onClick = {
                     newBarcode = code
@@ -388,6 +401,7 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
         ProductDialog(
             initial = null,
             presetBarcode = code,
+            lookup = vm::lookupKatalog,
             onDismiss = { newBarcode = null },
             onSave = { p ->
                 vm.saveProduct(p, addToCartAfter = p.stock > 0, scannedCode = code) { newBarcode = null }

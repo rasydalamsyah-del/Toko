@@ -3,7 +3,9 @@ package com.toko.kasir.data
 import android.content.ContentValues
 import android.database.Cursor
 import android.database.sqlite.SQLiteConstraintException
+import com.toko.kasir.logic.Barcodes
 import com.toko.kasir.logic.CartLogic
+import com.toko.kasir.logic.ImportRow
 import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -20,6 +22,8 @@ class Repository(private val helper: DbHelper) {
         stock = getInt(getColumnIndexOrThrow("stock")),
         unit = getString(getColumnIndexOrThrow("unit")) ?: "pcs",
         allowNominal = getInt(getColumnIndexOrThrow("allow_nominal")) != 0,
+        altBarcodes = (getString(getColumnIndexOrThrow("alt_barcodes")) ?: "")
+            .split('|').map { it.trim() }.filter { it.isNotEmpty() },
     )
 
     fun allProducts(): List<Product> {
@@ -54,23 +58,34 @@ class Repository(private val helper: DbHelper) {
         }
     }
 
-    /** Cari barang beserta satuan yang barcode-nya cocok (barcode bungkus, slop, dll.). */
+    /** Cari barang beserta satuan yang barcode-nya cocok (bungkus, slop, barcode lama/baru, dst.). */
     fun findByBarcode(code: String): Pair<Product, SaleUnit>? {
-        val c = code.trim()
-        if (c.isEmpty()) return null
+        val variants = Barcodes.variants(code)
+        if (variants.isEmpty()) return null
         for (p in allProducts()) {
-            if (p.barcode == c) {
-                val unit = if (p.price > 0) p.baseUnit else p.saleUnits.firstOrNull() ?: p.baseUnit
-                return p to unit
+            for ((c, unit) in p.allBarcodes) {
+                if (c in variants) {
+                    val u = if (unit.id == 0L && p.price <= 0) p.saleUnits.firstOrNull() ?: unit else unit
+                    return p to u
+                }
             }
-            p.units.firstOrNull { it.barcode == c }?.let { return p to it }
         }
         return null
     }
 
+    /** Peta semua barcode (termasuk variannya) -> nama barang, kecuali barang [exceptId]. */
+    private fun barcodeOwners(exceptId: Long = -1): Map<String, String> {
+        val map = HashMap<String, String>()
+        for (p in allProducts()) {
+            if (p.id == exceptId) continue
+            for ((c, _) in p.allBarcodes) Barcodes.variants(c).forEach { map[it] = p.name }
+        }
+        return map
+    }
+
     /** Simpan barang baru (id = 0) atau ubah barang lama, termasuk semua satuan jualnya. */
     fun saveProduct(p: Product): Product {
-        val codes = (listOf(p.barcode) + p.units.map { it.barcode })
+        val codes = (listOf(p.barcode) + p.altBarcodes + p.units.map { it.barcode })
             .map { it.trim() }
             .filter { it.isNotEmpty() }
         require(codes.size == codes.toSet().size) { "Ada barcode yang sama di beberapa satuan barang ini" }
@@ -78,14 +93,9 @@ class Repository(private val helper: DbHelper) {
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
+            val owners = barcodeOwners(exceptId = p.id)
             for (code in codes) {
-                val usedBy = db.rawQuery(
-                    """SELECT name FROM products WHERE barcode = ? AND id <> ?
-                       UNION ALL
-                       SELECT p.name FROM product_units u JOIN products p ON p.id = u.product_id
-                       WHERE u.barcode = ? AND u.product_id <> ?""",
-                    arrayOf(code, p.id.toString(), code, p.id.toString())
-                ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                val usedBy = Barcodes.variants(code).firstNotNullOfOrNull { owners[it] }
                 if (usedBy != null) throw IllegalArgumentException("Barcode $code sudah dipakai \"$usedBy\"")
             }
 
@@ -98,6 +108,7 @@ class Repository(private val helper: DbHelper) {
                 put("stock", p.stock)
                 put("unit", p.unit.trim().ifEmpty { "pcs" })
                 put("allow_nominal", if (p.allowNominal) 1 else 0)
+                put("alt_barcodes", p.altBarcodes.map { it.trim() }.filter { it.isNotEmpty() }.joinToString("|"))
             }
             val id = if (p.id == 0L) {
                 db.insertOrThrow("products", null, cv)
@@ -125,6 +136,61 @@ class Repository(private val helper: DbHelper) {
         } finally {
             db.endTransaction()
         }
+    }
+
+    data class ImportResult(val added: Int, val updated: Int, val skipped: Int)
+
+    /**
+     * Impor banyak barang sekaligus dalam satu transaksi.
+     * Barang yang barcode-nya (atau namanya, bila tanpa barcode) sudah ada dilewati,
+     * atau harganya diperbarui bila [updateExisting].
+     */
+    fun importProducts(rows: List<ImportRow>, updateExisting: Boolean): ImportResult {
+        val existing = allProducts()
+        val byCode = HashMap<String, Product>()
+        existing.forEach { p -> p.allBarcodes.forEach { (c, _) -> Barcodes.variants(c).forEach { byCode[it] = p } } }
+        val byName = existing.associateBy { it.name.trim().uppercase() }
+
+        var added = 0
+        var updated = 0
+        var skipped = 0
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            for (r in rows) {
+                val match = r.barcodes.flatMap { Barcodes.variants(it) }.firstNotNullOfOrNull { byCode[it] }
+                    ?: if (r.barcodes.isEmpty()) byName[r.name.trim().uppercase()] else null
+                if (match != null) {
+                    if (updateExisting && r.price > 0 && match.units.isEmpty()) {
+                        db.execSQL(
+                            "UPDATE products SET price = ?, cost = ? WHERE id = ?",
+                            arrayOf<Any>(r.price, if (r.cost > 0) r.cost else match.cost, match.id)
+                        )
+                        updated++
+                    } else {
+                        skipped++
+                    }
+                    continue
+                }
+                val id = db.insertOrThrow("products", null, ContentValues().apply {
+                    if (r.barcode.isEmpty()) putNull("barcode") else put("barcode", r.barcode)
+                    put("name", r.name.trim())
+                    put("price", r.price)
+                    put("cost", r.cost)
+                    put("stock", r.stock)
+                    put("unit", r.unit.ifBlank { "pcs" })
+                    put("allow_nominal", 0)
+                    put("alt_barcodes", r.barcodes.drop(1).joinToString("|"))
+                })
+                val placeholder = Product(id = id, name = r.name, price = r.price)
+                r.barcodes.forEach { c -> Barcodes.variants(c).forEach { byCode[it] = placeholder } }
+                added++
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return ImportResult(added, updated, skipped)
     }
 
     fun deleteProduct(id: Long) {

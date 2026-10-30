@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.toko.kasir.data.Product
+import com.toko.kasir.logic.Barcodes
 import com.toko.kasir.logic.Rupiah
 import com.toko.kasir.ui.TokoViewModel
 import com.toko.kasir.ui.components.EmptyState
@@ -46,6 +47,7 @@ fun BarangScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     var query by rememberSaveable { mutableStateOf("") }
     var editing by remember { mutableStateOf<Product?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var createWithCode by remember { mutableStateOf<String?>(null) }
     var scanning by remember { mutableStateOf(false) }
     val list = remember(query, vm.products) { vm.products.filter { it.matches(query) } }
 
@@ -100,11 +102,13 @@ fun BarangScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
         )
     }
 
-    if (creating) {
+    if (creating || createWithCode != null) {
         ProductDialog(
             initial = null,
-            onDismiss = { creating = false },
-            onSave = { vm.saveProduct(it) { creating = false } },
+            presetBarcode = createWithCode,
+            lookup = vm::lookupKatalog,
+            onDismiss = { creating = false; createWithCode = null },
+            onSave = { vm.saveProduct(it) { creating = false; createWithCode = null } },
         )
     }
     editing?.let { p ->
@@ -112,6 +116,7 @@ fun BarangScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             initial = p,
             onDismiss = { editing = null },
             onSave = { vm.saveProduct(it) { editing = null } },
+            lookup = vm::lookupKatalog,
             onDelete = {
                 vm.deleteProduct(p)
                 editing = null
@@ -123,11 +128,10 @@ fun BarangScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             onDismiss = { scanning = false },
             onResult = { code ->
                 scanning = false
-                val found = vm.products.firstOrNull { p -> p.barcode == code || p.units.any { it.barcode == code } }
-                if (found != null) editing = found else {
-                    query = code
-                    vm.show("Barcode $code belum terdaftar")
-                }
+                val variants = Barcodes.variants(code)
+                val found = vm.products.firstOrNull { p -> p.allBarcodes.any { (c, _) -> c in variants } }
+                // Belum terdaftar: langsung buka form tambah barang, nama terisi dari katalog bila ada.
+                if (found != null) editing = found else createWithCode = code
             },
         )
     }

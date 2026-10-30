@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.toko.kasir.data.Product
+import com.toko.kasir.logic.Barcodes
 import com.toko.kasir.logic.Rupiah
 import com.toko.kasir.ui.TokoViewModel
 import com.toko.kasir.ui.components.EmptyState
@@ -157,7 +158,8 @@ fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             onDismiss = { scanning = false },
             onResult = { code ->
                 scanning = false
-                val found = products.firstOrNull { p -> p.barcode == code || p.units.any { it.barcode == code } }
+                val variants = Barcodes.variants(code)
+                val found = products.firstOrNull { p -> p.allBarcodes.any { (c, _) -> c in variants } }
                 if (found != null) restock = found else vm.show("Barcode $code belum terdaftar")
             },
         )

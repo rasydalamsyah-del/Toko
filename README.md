@@ -10,7 +10,9 @@ Aplikasi kasir Android (Kotlin + Jetpack Compose) untuk toko kecil, dengan scan 
 | **Barang** | Tambah, ubah, hapus barang. **Multi-satuan**: satu barang bisa dijual per batang/bungkus/slop atau ¼ kg/½ kg/1 kg dengan harga dan barcode masing-masing, stok tetap satu. Bisa juga **jual sesuai nominal** (mis. minyak Rp7.000). |
 | **Stok** | Ringkasan barang menipis/habis, nilai stok, cari atau scan barang, tombol +/− cepat, restok (tambah atau atur jumlah). |
 | **Laporan** | Omzet, laba kotor, rincian per metode bayar, barang terlaris, riwayat transaksi. Transaksi bisa dibatalkan (stok kembali) dan struknya dicetak ulang. |
-| **Toko** | Info toko untuk struk, gambar QRIS, pilih printer, backup/pulihkan data, ekspor transaksi ke Excel (CSV). |
+| **Toko** | Info toko untuk struk, gambar QRIS, pilih printer, impor barang (daftar harga bawaan 2.892 barang atau file CSV, dicek dulu sebelum disimpan), backup/pulihkan data, ekspor transaksi ke Excel (CSV). |
+
+Katalog bawaan berisi ±25 ribu barcode: saat scan barang yang belum terdaftar, nama (dan harga saran bila ada) terisi otomatis.
 
 Stok berkurang otomatis setiap transaksi. Semua data tersimpan di HP (SQLite), tanpa internet.
 

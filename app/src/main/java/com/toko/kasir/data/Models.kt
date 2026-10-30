@@ -29,7 +29,17 @@ data class Product(
     val unit: String = "pcs",
     val units: List<SaleUnit> = emptyList(),
     val allowNominal: Boolean = false,
+    /** Barcode lain untuk satuan dasar (mis. barcode lama dan baru dari pabrik). */
+    val altBarcodes: List<String> = emptyList(),
 ) {
+    /** Semua barcode milik barang ini beserta satuannya. */
+    val allBarcodes: List<Pair<String, SaleUnit>>
+        get() = buildList {
+            if (barcode.isNotEmpty()) add(barcode to baseUnit)
+            altBarcodes.forEach { add(it to baseUnit) }
+            units.forEach { if (it.barcode.isNotEmpty()) add(it.barcode to it) }
+        }
+
     val baseUnit: SaleUnit get() = SaleUnit(0, unit, 1, price, cost, barcode)
 
     /** Semua satuan yang bisa dijual, dari isi terkecil. */
@@ -50,6 +60,7 @@ data class Product(
         if (q.isEmpty()) return true
         return name.contains(q, ignoreCase = true) ||
             barcode.contains(q, ignoreCase = true) ||
+            altBarcodes.any { it.contains(q) } ||
             units.any { it.barcode.isNotEmpty() && it.barcode.contains(q, ignoreCase = true) }
     }
 

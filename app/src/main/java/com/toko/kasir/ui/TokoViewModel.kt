@@ -24,7 +24,12 @@ import com.toko.kasir.data.SaleItem
 import com.toko.kasir.data.SaleUnit
 import com.toko.kasir.data.Settings
 import com.toko.kasir.data.StoreInfo
+import com.toko.kasir.logic.Barcodes
 import com.toko.kasir.logic.CartLogic
+import com.toko.kasir.logic.CsvImport
+import com.toko.kasir.logic.ImportRow
+import com.toko.kasir.logic.Katalog
+import com.toko.kasir.logic.KatalogItem
 import com.toko.kasir.logic.CartResult
 import com.toko.kasir.logic.Period
 import com.toko.kasir.logic.Receipt
@@ -64,10 +69,20 @@ class TokoViewModel(private val app: Application) : AndroidViewModel(app) {
     var printerName by mutableStateOf(settings.printerName); private set
     var qris by mutableStateOf<ImageBitmap?>(null); private set
 
+    /** Kamus barcode bawaan (±25 ribu barang) untuk isi otomatis nama barang. */
+    var katalog by mutableStateOf(Katalog.EMPTY); private set
+
+    /** Data impor yang sedang dicek ulang sebelum disimpan. */
+    var importDraft by mutableStateOf<List<ImportRow>?>(null); private set
+    var importing by mutableStateOf(false); private set
+
     init {
         refreshProducts()
         refreshReport()
         launchSafe { qris = io { loadQris() } }
+        launchSafe {
+            katalog = io { app.assets.open("katalog.tsv").bufferedReader().use { Katalog.load(it) } }
+        }
     }
 
     private fun launchSafe(block: suspend CoroutineScope.() -> Unit) = viewModelScope.launch {
@@ -287,6 +302,54 @@ class TokoViewModel(private val app: Application) : AndroidViewModel(app) {
         settings.printerAddress = device.address
         printerName = device.name
         show("Printer: ${device.name}")
+    }
+
+    // ---------- Katalog & impor ----------
+
+    fun lookupKatalog(code: String): KatalogItem? = if (code.isBlank()) null else katalog.lookup(code)
+
+    /** Barcode-barcode milik barang yang sudah terdaftar (untuk menandai "sudah ada" saat impor). */
+    fun existingCodes(): Set<String> =
+        products.flatMap { p -> p.allBarcodes.flatMap { (c, _) -> Barcodes.variants(c) } }.toSet()
+
+    fun existingNames(): Set<String> = products.map { it.name.trim().uppercase() }.toSet()
+
+    fun openBuiltInPriceList() = launchSafe {
+        importDraft = io {
+            app.assets.open("daftar-harga.csv").bufferedReader().use { CsvImport.parse(it.readText()) }
+        }
+    }
+
+    fun openImportFile(uri: Uri) = launchSafe {
+        val rows = io {
+            val text = app.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?: throw IllegalStateException("File tidak bisa dibuka")
+            CsvImport.parse(text)
+        }
+        if (rows.isEmpty()) throw IllegalStateException("Tidak ada barang di file ini")
+        importDraft = rows
+    }
+
+    fun closeImport() {
+        importDraft = null
+    }
+
+    fun confirmImport(rows: List<ImportRow>, updateExisting: Boolean) = launchSafe {
+        importing = true
+        try {
+            val r = io { repo.importProducts(rows, updateExisting) }
+            importDraft = null
+            show(
+                buildString {
+                    append("${r.added} barang ditambahkan")
+                    if (r.updated > 0) append(", ${r.updated} harga diperbarui")
+                    if (r.skipped > 0) append(", ${r.skipped} dilewati karena sudah ada")
+                }
+            )
+            refreshProducts()
+        } finally {
+            importing = false
+        }
     }
 
     // ---------- Pengaturan toko ----------

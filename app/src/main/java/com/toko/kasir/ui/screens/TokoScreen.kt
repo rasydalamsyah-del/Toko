@@ -18,10 +18,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -44,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.toko.kasir.data.BtPrinter
 import com.toko.kasir.data.PrinterDevice
+import com.toko.kasir.logic.Angka
 import com.toko.kasir.logic.Waktu
 import com.toko.kasir.ui.TokoViewModel
 
@@ -62,6 +65,9 @@ fun TokoScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     ) { uri -> if (uri != null) vm.backupTo(uri) }
     val restoreFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.restoreFrom(uri)
+    }
+    val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.openImportFile(uri)
     }
     val csvFile = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/csv")
@@ -143,6 +149,30 @@ fun TokoScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
         }
 
         Section(
+            "Impor barang",
+            "Masukkan banyak barang sekaligus. Sebelum disimpan, daftar bisa dicek dan harganya diubah.",
+        ) {
+            OutlinedButton(onClick = vm::openBuiltInPriceList, modifier = Modifier.fillMaxWidth()) {
+                IconText(Icons.Filled.PlaylistAdd, "Dari daftar harga bawaan (2.892 barang)")
+            }
+            OutlinedButton(onClick = { importFile.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
+                IconText(Icons.Filled.UploadFile, "Dari file CSV")
+            }
+            Text(
+                "File Excel: simpan dulu sebagai CSV. Kolom yang dikenali: nama, barcode, harga, modal, stok, satuan, kategori.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                if (vm.katalog.size > 0) "Katalog barcode: ${Angka.format(vm.katalog.size)} barang. " +
+                    "Saat scan barang yang belum terdaftar, nama terisi otomatis."
+                else "Memuat katalog barcode…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+
+        Section(
             "Data toko",
             "Simpan backup secara rutin ke Google Drive atau kirim ke WA sendiri, supaya data aman kalau HP rusak.",
         ) {
@@ -193,6 +223,17 @@ fun TokoScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                 }
             },
             confirmButton = { TextButton(onClick = { devices = null }) { Text("Tutup") } },
+        )
+    }
+
+    vm.importDraft?.let { rows ->
+        ImportDialog(
+            rows = rows,
+            existingCodes = remember(rows, vm.products) { vm.existingCodes() },
+            existingNames = remember(rows, vm.products) { vm.existingNames() },
+            saving = vm.importing,
+            onDismiss = vm::closeImport,
+            onConfirm = { selected, update -> vm.confirmImport(selected, update) },
         )
     }
 

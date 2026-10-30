@@ -8,7 +8,7 @@ class DbHelper(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION
 
     companion object {
         const val NAME = "toko.db"
-        const val VERSION = 3
+        const val VERSION = 4
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -21,7 +21,8 @@ class DbHelper(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION
                 cost INTEGER NOT NULL DEFAULT 0,
                 stock INTEGER NOT NULL DEFAULT 0,
                 unit TEXT NOT NULL DEFAULT 'pcs',
-                allow_nominal INTEGER NOT NULL DEFAULT 0)"""
+                allow_nominal INTEGER NOT NULL DEFAULT 0,
+                alt_barcodes TEXT NOT NULL DEFAULT '')"""
         )
         db.execSQL(
             """CREATE TABLE sales(
@@ -77,6 +78,10 @@ class DbHelper(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION
             db.execSQL("ALTER TABLE sale_items ADD COLUMN unit_name TEXT NOT NULL DEFAULT ''")
             db.execSQL("ALTER TABLE sale_items ADD COLUMN base_qty INTEGER NOT NULL DEFAULT 0")
             db.execSQL("UPDATE sale_items SET base_qty = qty")
+        }
+        if (oldVersion < 4) {
+            // v4: barcode tambahan per barang (barcode lama/baru dari pabrik), dipisah "|".
+            db.execSQL("ALTER TABLE products ADD COLUMN alt_barcodes TEXT NOT NULL DEFAULT ''")
         }
     }
 }

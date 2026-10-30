@@ -1,5 +1,6 @@
 package com.toko.kasir.ui.components
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -32,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +47,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.toko.kasir.data.Product
 import com.toko.kasir.data.SaleUnit
+import com.toko.kasir.logic.Barcodes
+import com.toko.kasir.logic.KatalogItem
 import com.toko.kasir.logic.Rupiah
 
 /** Isian satu satuan jual di form (semua teks supaya mudah diedit). */
@@ -70,8 +75,10 @@ fun ProductDialog(
     onDismiss: () -> Unit,
     onSave: (Product) -> Unit,
     onDelete: (() -> Unit)? = null,
+    lookup: (String) -> KatalogItem? = { null },
 ) {
     var barcode by remember { mutableStateOf(initial?.barcode ?: presetBarcode ?: "") }
+    var altText by remember { mutableStateOf(initial?.altBarcodes.orEmpty().joinToString(", ")) }
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var unit by remember { mutableStateOf(initial?.unit ?: "pcs") }
     var price by remember { mutableStateOf(initial?.price?.takeIf { it > 0 }?.toString() ?: "") }
@@ -95,6 +102,16 @@ fun ProductDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+
+    // Isi otomatis dari katalog bawaan saat barcode diisi/discan dan nama masih kosong.
+    val hit = remember(barcode) { if (barcode.length >= 8) lookup(barcode) else null }
+    LaunchedEffect(hit) {
+        if (hit != null && name.isBlank()) {
+            name = hit.names.first()
+            if (price.isBlank() && hit.price > 0) price = hit.price.toString()
+            if (cost.isBlank() && hit.cost > 0) cost = hit.cost.toString()
+        }
+    }
 
     fun updateUnit(i: Int, f: (UnitDraft) -> UnitDraft) {
         units = units.mapIndexed { idx, u -> if (idx == i) f(u) else u }
@@ -135,6 +152,7 @@ fun ProductDialog(
                 unit = baseName,
                 units = parsed,
                 allowNominal = allowNominal,
+                altBarcodes = Barcodes.split(altText).filter { it != barcode.trim() },
             )
         )
     }
@@ -174,6 +192,9 @@ fun ProductDialog(
                         label = { Text("Nama barang") }, singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    if (hit != null) {
+                        KatalogHint(hit, current = name, onPick = { name = it })
+                    }
 
                     SectionLabel(
                         "Satuan dasar",
@@ -200,6 +221,12 @@ fun ProductDialog(
                                 Icon(Icons.Filled.QrCodeScanner, contentDescription = "Scan barcode")
                             }
                         },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = altText, onValueChange = { altText = it },
+                        label = { Text("Barcode lain, pisahkan dengan koma (opsional)") },
+                        supportingText = { Text("Untuk barang yang punya barcode lama dan baru dari pabrik.") },
                         modifier = Modifier.fillMaxWidth(),
                     )
 
@@ -320,6 +347,39 @@ fun ProductDialog(
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Batal") } },
         )
+    }
+}
+
+/** Saran nama (dan harga) dari katalog bawaan untuk barcode yang diisi. */
+@Composable
+private fun KatalogHint(hit: KatalogItem, current: String, onPick: (String) -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                if (hit.names.size > 1) "Ditemukan di katalog (pilih nama):" else "Ditemukan di katalog:",
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                hit.names.forEach { n ->
+                    FilterChip(
+                        selected = n.equals(current.trim(), ignoreCase = true),
+                        onClick = { onPick(n) },
+                        label = { Text(n, maxLines = 1) },
+                    )
+                }
+            }
+            if (hit.price > 0) {
+                Text(
+                    "Harga saran dari daftar harga: ${Rupiah.format(hit.price)}. Sesuaikan dengan harga toko Anda.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }
 
