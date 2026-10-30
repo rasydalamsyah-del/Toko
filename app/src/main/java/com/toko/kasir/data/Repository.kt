@@ -19,46 +19,124 @@ class Repository(private val helper: DbHelper) {
         cost = getLong(getColumnIndexOrThrow("cost")),
         stock = getInt(getColumnIndexOrThrow("stock")),
         unit = getString(getColumnIndexOrThrow("unit")) ?: "pcs",
+        allowNominal = getInt(getColumnIndexOrThrow("allow_nominal")) != 0,
     )
 
-    fun allProducts(): List<Product> =
-        helper.readableDatabase.rawQuery(
-            "SELECT * FROM products ORDER BY name COLLATE NOCASE", null
+    fun allProducts(): List<Product> {
+        val db = helper.readableDatabase
+        val units = db.rawQuery(
+            "SELECT id, product_id, name, factor, price, cost, barcode FROM product_units ORDER BY factor",
+            null
         ).use { c ->
-            buildList { while (c.moveToNext()) add(c.toProduct()) }
+            buildList {
+                while (c.moveToNext()) {
+                    add(
+                        c.getLong(1) to SaleUnit(
+                            id = c.getLong(0),
+                            name = c.getString(2),
+                            factor = c.getInt(3),
+                            price = c.getLong(4),
+                            cost = c.getLong(5),
+                            barcode = c.getString(6) ?: "",
+                        )
+                    )
+                }
+            }
+        }.groupBy({ it.first }, { it.second })
+
+        return db.rawQuery("SELECT * FROM products ORDER BY name COLLATE NOCASE", null).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    val p = c.toProduct()
+                    add(p.copy(units = units[p.id].orEmpty()))
+                }
+            }
         }
+    }
 
-    fun findByBarcode(code: String): Product? =
-        helper.readableDatabase.rawQuery(
-            "SELECT * FROM products WHERE barcode = ? LIMIT 1", arrayOf(code.trim())
-        ).use { c -> if (c.moveToFirst()) c.toProduct() else null }
+    /** Cari barang beserta satuan yang barcode-nya cocok (barcode bungkus, slop, dll.). */
+    fun findByBarcode(code: String): Pair<Product, SaleUnit>? {
+        val c = code.trim()
+        if (c.isEmpty()) return null
+        for (p in allProducts()) {
+            if (p.barcode == c) {
+                val unit = if (p.price > 0) p.baseUnit else p.saleUnits.firstOrNull() ?: p.baseUnit
+                return p to unit
+            }
+            p.units.firstOrNull { it.barcode == c }?.let { return p to it }
+        }
+        return null
+    }
 
-    /** Simpan barang baru (id = 0) atau ubah barang lama. */
+    /** Simpan barang baru (id = 0) atau ubah barang lama, termasuk semua satuan jualnya. */
     fun saveProduct(p: Product): Product {
-        val cv = ContentValues().apply {
-            val code = p.barcode.trim()
-            if (code.isEmpty()) putNull("barcode") else put("barcode", code)
-            put("name", p.name.trim())
-            put("price", p.price)
-            put("cost", p.cost)
-            put("stock", p.stock)
-            put("unit", p.unit.trim().ifEmpty { "pcs" })
-        }
+        val codes = (listOf(p.barcode) + p.units.map { it.barcode })
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        require(codes.size == codes.toSet().size) { "Ada barcode yang sama di beberapa satuan barang ini" }
+
         val db = helper.writableDatabase
+        db.beginTransaction()
         try {
-            return if (p.id == 0L) {
-                p.copy(id = db.insertOrThrow("products", null, cv))
+            for (code in codes) {
+                val usedBy = db.rawQuery(
+                    """SELECT name FROM products WHERE barcode = ? AND id <> ?
+                       UNION ALL
+                       SELECT p.name FROM product_units u JOIN products p ON p.id = u.product_id
+                       WHERE u.barcode = ? AND u.product_id <> ?""",
+                    arrayOf(code, p.id.toString(), code, p.id.toString())
+                ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                if (usedBy != null) throw IllegalArgumentException("Barcode $code sudah dipakai \"$usedBy\"")
+            }
+
+            val cv = ContentValues().apply {
+                val code = p.barcode.trim()
+                if (code.isEmpty()) putNull("barcode") else put("barcode", code)
+                put("name", p.name.trim())
+                put("price", p.price)
+                put("cost", p.cost)
+                put("stock", p.stock)
+                put("unit", p.unit.trim().ifEmpty { "pcs" })
+                put("allow_nominal", if (p.allowNominal) 1 else 0)
+            }
+            val id = if (p.id == 0L) {
+                db.insertOrThrow("products", null, cv)
             } else {
                 db.update("products", cv, "id = ?", arrayOf(p.id.toString()))
-                p
+                p.id
             }
+
+            db.delete("product_units", "product_id = ?", arrayOf(id.toString()))
+            for (u in p.units) {
+                db.insertOrThrow("product_units", null, ContentValues().apply {
+                    put("product_id", id)
+                    put("name", u.name.trim())
+                    put("factor", u.factor)
+                    put("price", u.price)
+                    put("cost", u.cost)
+                    val code = u.barcode.trim()
+                    if (code.isEmpty()) putNull("barcode") else put("barcode", code)
+                })
+            }
+            db.setTransactionSuccessful()
+            return p.copy(id = id)
         } catch (e: SQLiteConstraintException) {
-            throw IllegalArgumentException("Barcode ${p.barcode} sudah dipakai barang lain")
+            throw IllegalArgumentException("Barcode sudah dipakai barang lain")
+        } finally {
+            db.endTransaction()
         }
     }
 
     fun deleteProduct(id: Long) {
-        helper.writableDatabase.delete("products", "id = ?", arrayOf(id.toString()))
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("product_units", "product_id = ?", arrayOf(id.toString()))
+            db.delete("products", "id = ?", arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun adjustStock(id: Long, delta: Int) {
@@ -85,13 +163,17 @@ class Repository(private val helper: DbHelper) {
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
-            for (ci in items) {
+            // Cek stok per barang (jumlah semua satuan dalam satuan dasar).
+            for ((product, lines) in items.groupBy { it.product.id }.mapKeys { it.value.first().product }) {
+                val needed = lines.sumOf { it.baseQty }
                 val current = db.rawQuery(
-                    "SELECT stock FROM products WHERE id = ?", arrayOf(ci.product.id.toString())
+                    "SELECT stock FROM products WHERE id = ?", arrayOf(product.id.toString())
                 ).use { c -> if (c.moveToFirst()) c.getInt(0) else null }
-                    ?: throw IllegalStateException("${ci.product.name} sudah dihapus dari daftar barang")
-                if (current < ci.qty) {
-                    throw IllegalStateException("Stok ${ci.product.name} tidak cukup (sisa $current)")
+                    ?: throw IllegalStateException("${product.name} sudah dihapus dari daftar barang")
+                if (current < needed) {
+                    throw IllegalStateException(
+                        "Stok ${product.name} tidak cukup (sisa ${product.stockText(current)})"
+                    )
                 }
             }
 
@@ -109,13 +191,15 @@ class Repository(private val helper: DbHelper) {
                     put("sale_id", saleId)
                     put("product_id", ci.product.id)
                     put("name", ci.product.name)
-                    put("price", ci.product.price)
-                    put("cost", ci.product.cost)
+                    put("price", ci.unit.price)
+                    put("cost", ci.unit.cost)
                     put("qty", ci.qty)
+                    put("unit_name", ci.unit.name)
+                    put("base_qty", ci.baseQty)
                 })
                 db.execSQL(
                     "UPDATE products SET stock = stock - ? WHERE id = ?",
-                    arrayOf<Any>(ci.qty, ci.product.id)
+                    arrayOf<Any>(ci.baseQty, ci.product.id)
                 )
             }
             db.setTransactionSuccessful()
@@ -141,7 +225,7 @@ class Repository(private val helper: DbHelper) {
 
             db.execSQL(
                 """UPDATE products SET stock = stock +
-                     (SELECT COALESCE(SUM(si.qty), 0) FROM sale_items si
+                     (SELECT COALESCE(SUM(si.base_qty), 0) FROM sale_items si
                       WHERE si.sale_id = ? AND si.product_id = products.id)
                    WHERE id IN (SELECT product_id FROM sale_items WHERE sale_id = ?)""",
                 arrayOf<Any>(saleId, saleId)
@@ -155,10 +239,14 @@ class Repository(private val helper: DbHelper) {
 
     fun saleItems(saleId: Long): List<SaleItem> =
         helper.readableDatabase.rawQuery(
-            "SELECT name, price, qty FROM sale_items WHERE sale_id = ? ORDER BY id",
+            "SELECT name, price, qty, unit_name FROM sale_items WHERE sale_id = ? ORDER BY id",
             arrayOf(saleId.toString())
         ).use { c ->
-            buildList { while (c.moveToNext()) add(SaleItem(c.getString(0), c.getLong(1), c.getInt(2))) }
+            buildList {
+                while (c.moveToNext()) {
+                    add(SaleItem(c.getString(0), c.getLong(1), c.getInt(2), c.getString(3) ?: ""))
+                }
+            }
         }
 
     fun report(from: Long): Report {
@@ -193,12 +281,15 @@ class Repository(private val helper: DbHelper) {
         ).use { c -> if (c.moveToFirst()) c.getLong(0) to c.getInt(1) else 0L to 0 }
 
         val top = db.rawQuery(
-            """SELECT si.name, SUM(si.qty) AS q
+            """SELECT si.name, SUM(si.base_qty) AS q, COALESCE(p.unit, '')
                FROM sale_items si JOIN sales s ON s.id = si.sale_id
+               LEFT JOIN products p ON p.id = si.product_id
                WHERE s.time >= ? AND s.status = 0
-               GROUP BY si.product_id, si.name ORDER BY q DESC LIMIT 5""",
+               GROUP BY si.product_id, si.name ORDER BY SUM(si.price * si.qty) DESC LIMIT 5""",
             args
-        ).use { c -> buildList { while (c.moveToNext()) add(TopItem(c.getString(0), c.getInt(1))) } }
+        ).use { c ->
+            buildList { while (c.moveToNext()) add(TopItem(c.getString(0), c.getInt(1), c.getString(2) ?: "")) }
+        }
 
         val valid = sales.filterNot { it.canceled }
         val byMethod = PayMethod.entries.mapNotNull { m ->
@@ -223,9 +314,9 @@ class Repository(private val helper: DbHelper) {
         fun esc(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
         out.bufferedWriter(Charsets.UTF_8).use { w ->
             w.write("sep=;\n")
-            w.write("No;Waktu;Metode;Status;Barang;Jumlah;Harga;Subtotal;Total transaksi\n")
+            w.write("No;Waktu;Metode;Status;Barang;Satuan;Jumlah;Harga;Subtotal;Total transaksi\n")
             helper.readableDatabase.rawQuery(
-                """SELECT s.id, s.time, s.method, s.status, si.name, si.qty, si.price, s.total
+                """SELECT s.id, s.time, s.method, s.status, si.name, si.qty, si.price, s.total, si.unit_name
                    FROM sales s JOIN sale_items si ON si.sale_id = s.id
                    ORDER BY s.time, si.id""",
                 null
@@ -240,6 +331,7 @@ class Repository(private val helper: DbHelper) {
                             PayMethod.of(c.getString(2)).label,
                             if (c.getInt(3) != 0) "Dibatalkan" else "Sah",
                             esc(c.getString(4)),
+                            esc(c.getString(8) ?: ""),
                             qty.toString(),
                             price.toString(),
                             (price * qty).toString(),

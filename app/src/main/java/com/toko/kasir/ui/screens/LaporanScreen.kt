@@ -119,7 +119,7 @@ fun LaporanScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text("${i + 1}.", Modifier.padding(end = 8.dp), fontWeight = FontWeight.Bold)
                             Text(t.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${t.qty} terjual")
+                            Text("${com.toko.kasir.logic.Angka.format(t.qty)} ${t.unit}".trim())
                         }
                     }
                 }
@@ -182,7 +182,7 @@ fun LaporanScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                     saleItems.forEach { si ->
                         Row(Modifier.fillMaxWidth()) {
                             Column(Modifier.weight(1f)) {
-                                Text(si.name)
+                                Text(si.label)
                                 Text(
                                     "${Rupiah.format(si.price)} × ${si.qty}",
                                     style = MaterialTheme.typography.bodySmall,

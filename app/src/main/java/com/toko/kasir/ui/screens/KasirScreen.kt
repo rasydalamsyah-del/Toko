@@ -71,6 +71,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.toko.kasir.data.CartItem
 import com.toko.kasir.data.PayMethod
+import com.toko.kasir.data.Product
+import com.toko.kasir.data.SaleUnit
 import com.toko.kasir.logic.CartLogic
 import com.toko.kasir.logic.Rupiah
 import com.toko.kasir.ui.TokoViewModel
@@ -90,6 +92,7 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     var newBarcode by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var editQty by remember { mutableStateOf<CartItem?>(null) }
+    var changeUnitFor by remember { mutableStateOf<CartItem?>(null) }
     val listState = rememberLazyListState()
     val receipt = rememberReceiptActions(vm)
 
@@ -100,7 +103,8 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     }
     // Kamera dijeda saat ada dialog supaya tidak bentrok dengan kamera di dialog lain.
     val dialogOpen = paying || newBarcode != null || vm.unknownBarcode != null ||
-        vm.lastSale != null || confirmClear || editQty != null
+        vm.lastSale != null || confirmClear || editQty != null ||
+        vm.unitPicker != null || changeUnitFor != null
 
     // Barang baru: gulir ke atas, sorot sebentar, lalu hilangkan sorotan.
     val highlight = vm.highlight
@@ -180,11 +184,13 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                 keyboardActions = KeyboardActions(onDone = {
                     // Juga mendukung scanner barcode USB/Bluetooth yang mengetik + Enter.
                     val q = query.trim()
-                    val exact = vm.products.firstOrNull { it.barcode.isNotEmpty() && it.barcode == q }
+                    val exact = vm.products.any { p ->
+                        (p.barcode.isNotEmpty() && p.barcode == q) || p.units.any { it.barcode == q }
+                    }
                     when {
                         q.isEmpty() -> Unit
-                        exact != null -> { vm.addToCart(exact); query = "" }
-                        matches.size == 1 -> { vm.addToCart(matches.first()); query = "" }
+                        exact -> { vm.onBarcodeScanned(q); query = "" }
+                        matches.size == 1 -> { vm.selectProduct(matches.first()); query = "" }
                         q.all { it.isDigit() } && q.length >= 6 -> { vm.onBarcodeScanned(q); query = "" }
                     }
                 }),
@@ -204,7 +210,7 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                         Modifier
                             .fillMaxWidth()
                             .clickable(enabled = p.stock > 0) {
-                                vm.addToCart(p)
+                                vm.selectProduct(p)
                                 query = ""
                             }
                             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -213,13 +219,16 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
                         Column(Modifier.weight(1f)) {
                             Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
-                                if (p.stock > 0) "Stok ${p.stock} ${p.unit}" else "Stok habis",
+                                if (p.stock > 0) "Stok ${p.stockText()}" else "Stok habis",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (p.stock > 0) MaterialTheme.colorScheme.onSurfaceVariant
                                 else MaterialTheme.colorScheme.error,
                             )
                         }
-                        Text(Rupiah.format(p.price), fontWeight = FontWeight.SemiBold)
+                        Text(
+                            p.saleUnits.firstOrNull()?.let { "${Rupiah.format(it.price)}/${it.name}" } ?: "",
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
             }
@@ -254,13 +263,14 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             }
             HorizontalDivider()
             LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
-                items(cart, key = { it.product.id }) { item ->
+                items(cart, key = { it.key }) { item ->
                     CartRow(
                         item = item,
-                        highlighted = highlight?.productId == item.product.id,
-                        onMinus = { vm.setQty(item.product.id, item.qty - 1) },
-                        onPlus = { vm.setQty(item.product.id, item.qty + 1) },
+                        highlighted = highlight?.key == item.key,
+                        onMinus = { vm.setQty(item.key, item.qty - 1) },
+                        onPlus = { vm.setQty(item.key, item.qty + 1) },
                         onQtyClick = { editQty = item },
+                        onUnitClick = { changeUnitFor = item },
                     )
                     HorizontalDivider()
                 }
@@ -324,9 +334,38 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             item = item,
             onDismiss = { editQty = null },
             onSave = { qty ->
-                vm.setQty(item.product.id, qty)
+                vm.setQty(item.key, qty)
                 editQty = null
             },
+        )
+    }
+
+    vm.unitPicker?.let { product ->
+        UnitPickerDialog(
+            product = product,
+            title = product.name,
+            onDismiss = vm::dismissUnitPicker,
+            onPick = { unit ->
+                vm.dismissUnitPicker()
+                vm.addToCart(product, unit)
+            },
+            onNominal = if (product.allowNominal) { nominal: Long ->
+                vm.dismissUnitPicker()
+                vm.addNominal(product, nominal)
+            } else null,
+        )
+    }
+
+    changeUnitFor?.let { item ->
+        UnitPickerDialog(
+            product = item.product,
+            title = "Ganti satuan ${item.product.name}",
+            onDismiss = { changeUnitFor = null },
+            onPick = { unit ->
+                vm.changeUnit(item.key, unit)
+                changeUnitFor = null
+            },
+            onNominal = null,
         )
     }
 
@@ -350,7 +389,9 @@ fun KasirScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             initial = null,
             presetBarcode = code,
             onDismiss = { newBarcode = null },
-            onSave = { p -> vm.saveProduct(p, addToCartAfter = p.stock > 0) { newBarcode = null } },
+            onSave = { p ->
+                vm.saveProduct(p, addToCartAfter = p.stock > 0, scannedCode = code) { newBarcode = null }
+            },
         )
     }
 
@@ -408,11 +449,13 @@ private fun CartRow(
     onMinus: () -> Unit,
     onPlus: () -> Unit,
     onQtyClick: () -> Unit,
+    onUnitClick: () -> Unit,
 ) {
     val bg by animateColorAsState(
         if (highlighted) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         label = "sorot",
     )
+    val canChangeUnit = !item.isNominal && item.product.saleUnits.size > 1
     Row(
         Modifier
             .fillMaxWidth()
@@ -422,26 +465,115 @@ private fun CartRow(
     ) {
         Column(Modifier.weight(1f)) {
             Text(item.product.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(
-                "${Rupiah.format(item.product.price)} · ${Rupiah.format(item.subtotal)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (item.isNominal) item.unit.name else "/${item.unit.name}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .border(
+                            1.dp,
+                            if (canChangeUnit) MaterialTheme.colorScheme.primary else Color.Transparent,
+                            RoundedCornerShape(6.dp),
+                        )
+                        .clickable(enabled = canChangeUnit, onClick = onUnitClick)
+                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                )
+                Text(
+                    if (item.isNominal) "  ${Rupiah.format(item.subtotal)}"
+                    else "  ${Rupiah.format(item.unit.price)} · ${Rupiah.format(item.subtotal)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
-        IconButton(onClick = onMinus) { Icon(Icons.Filled.Remove, contentDescription = "Kurangi") }
-        Text(
-            item.qty.toString(),
-            style = MaterialTheme.typography.titleMedium,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            modifier = Modifier
-                .widthIn(min = 44.dp)
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-                .clickable(onClick = onQtyClick)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        )
-        IconButton(onClick = onPlus) { Icon(Icons.Filled.Add, contentDescription = "Tambah") }
+        if (item.isNominal) {
+            IconButton(onClick = onMinus) { Icon(Icons.Filled.Close, contentDescription = "Hapus") }
+        } else {
+            IconButton(onClick = onMinus) { Icon(Icons.Filled.Remove, contentDescription = "Kurangi") }
+            Text(
+                item.qty.toString(),
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                modifier = Modifier
+                    .widthIn(min = 44.dp)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                    .clickable(onClick = onQtyClick)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+            IconButton(onClick = onPlus) { Icon(Icons.Filled.Add, contentDescription = "Tambah") }
+        }
     }
+}
+
+/** Pilih satuan (batang/bungkus/slop) atau isi nominal, saat memilih barang di kasir. */
+@Composable
+private fun UnitPickerDialog(
+    product: Product,
+    title: String,
+    onDismiss: () -> Unit,
+    onPick: (SaleUnit) -> Unit,
+    onNominal: ((Long) -> Unit)?,
+) {
+    var nominalText by remember { mutableStateOf("") }
+    val nominal = Rupiah.parse(nominalText)
+    val preview = remember(nominal) {
+        if (nominal > 0) CartLogic.nominalUnit(product, nominal, -1) else null
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Stok: ${product.stockText()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                product.saleUnits.forEach { u ->
+                    OutlinedButton(
+                        onClick = { onPick(u) },
+                        enabled = u.factor <= product.stock,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(u.name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                        Text(Rupiah.format(u.price))
+                    }
+                }
+                if (onNominal != null) {
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    Text("Sesuai nominal", fontWeight = FontWeight.Medium)
+                    NumberField(nominalText, { nominalText = it }, "Nominal pembeli", prefix = "Rp")
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        listOf(2_000L, 5_000L, 10_000L, 20_000L).forEach { v ->
+                            AssistChip(onClick = { nominalText = v.toString() }, label = { Text(Rupiah.format(v)) })
+                        }
+                    }
+                    if (nominal > 0) {
+                        Text(
+                            if (preview != null) "Dapat ${preview.name}" else "Nominal terlalu kecil",
+                            color = if (preview != null) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Button(
+                        onClick = { onNominal(nominal) },
+                        enabled = preview != null && preview.factor <= product.stock,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Tambah ${if (nominal > 0) Rupiah.format(nominal) else "nominal"}") }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
+    )
 }
 
 @Composable
@@ -453,9 +585,9 @@ private fun QtyDialog(item: CartItem, onDismiss: () -> Unit, onSave: (Int) -> Un
         title = { Text(item.product.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField(text, { text = it }, "Jumlah (${item.product.unit})")
+                NumberField(text, { text = it }, "Jumlah (${item.unit.name})")
                 Text(
-                    "Stok tersedia: ${item.product.stock} ${item.product.unit}",
+                    "Stok tersedia: ${item.product.stockText()}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -21,6 +21,7 @@ import com.toko.kasir.data.Report
 import com.toko.kasir.data.Repository
 import com.toko.kasir.data.Sale
 import com.toko.kasir.data.SaleItem
+import com.toko.kasir.data.SaleUnit
 import com.toko.kasir.data.Settings
 import com.toko.kasir.data.StoreInfo
 import com.toko.kasir.logic.CartLogic
@@ -36,8 +37,8 @@ import java.io.File
 
 data class UiMessage(val text: String, val id: Long = System.nanoTime())
 
-/** Penanda barang yang baru masuk keranjang (untuk disorot dan ditampilkan di atas kamera). */
-data class Highlight(val productId: Long, val label: String, val id: Long = System.nanoTime())
+/** Penanda baris yang baru masuk keranjang (untuk disorot dan ditampilkan di atas kamera). */
+data class Highlight(val key: String, val label: String, val id: Long = System.nanoTime())
 
 class TokoViewModel(private val app: Application) : AndroidViewModel(app) {
 
@@ -53,6 +54,8 @@ class TokoViewModel(private val app: Application) : AndroidViewModel(app) {
     var message by mutableStateOf<UiMessage?>(null); private set
     /** Barcode hasil scan yang belum terdaftar, untuk ditawarkan ditambahkan. */
     var unknownBarcode by mutableStateOf<String?>(null); private set
+    /** Barang yang sedang dipilih satuannya di kasir. */
+    var unitPicker by mutableStateOf<Product?>(null); private set
     var lastSale by mutableStateOf<Sale?>(null); private set
     var period by mutableStateOf(Period.TODAY); private set
     var report by mutableStateOf(Report.EMPTY); private set
@@ -89,44 +92,82 @@ class TokoViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun refreshProducts() = launchSafe {
         products = io { repo.allProducts() }
-        // Sinkronkan data barang di keranjang (harga/stok terbaru).
+        // Sinkronkan data barang di keranjang (harga/stok/satuan terbaru).
         val byId = products.associateBy { it.id }
-        cart = cart.mapNotNull { ci -> byId[ci.product.id]?.let { CartItem(it, ci.qty) } }
+        cart = cart.mapNotNull { ci ->
+            val p = byId[ci.product.id] ?: return@mapNotNull null
+            val unit = when {
+                ci.isNominal -> ci.unit
+                else -> p.saleUnits.firstOrNull { it.id == ci.unit.id }
+                    ?: p.saleUnits.firstOrNull { it.name == ci.unit.name && it.factor == ci.unit.factor }
+                    ?: return@mapNotNull null
+            }
+            CartItem(p, unit, ci.qty)
+        }
     }
 
     // ---------- Kasir ----------
 
     fun onBarcodeScanned(code: String) = launchSafe {
-        val product = io { repo.findByBarcode(code) }
-        if (product == null) unknownBarcode = code else addToCart(product)
+        val found = io { repo.findByBarcode(code) }
+        if (found == null) unknownBarcode = code else addToCart(found.first, found.second)
     }
 
     fun dismissUnknownBarcode() {
         unknownBarcode = null
     }
 
-    fun addToCart(product: Product) {
-        when (val r = CartLogic.add(cart, product)) {
+    /** Dari pencarian: langsung masuk bila satu satuan, atau tampilkan pilihan satuan. */
+    fun selectProduct(product: Product) {
+        val units = product.saleUnits
+        if (product.needsUnitChoice || units.isEmpty()) unitPicker = product
+        else addToCart(product, units.first())
+    }
+
+    fun dismissUnitPicker() {
+        unitPicker = null
+    }
+
+    private fun applyResult(r: CartResult, onOk: (List<CartItem>) -> Unit = {}) {
+        when (r) {
             is CartResult.Ok -> {
                 cart = r.items
-                val qty = r.items.firstOrNull()?.qty ?: 1
-                highlight = Highlight(product.id, "${product.name} ($qty)")
+                onOk(r.items)
             }
             is CartResult.StokKurang ->
-                show("Stok ${r.product.name} tidak cukup (sisa ${r.available})")
+                show("Stok ${r.product.name} tidak cukup (sisa ${r.product.stockText(r.available)})")
         }
+    }
+
+    fun addToCart(product: Product, unit: SaleUnit, qty: Int = 1) {
+        applyResult(CartLogic.add(cart, product, unit, qty)) { items ->
+            val line = items.first()
+            highlight = Highlight(line.key, "${product.name} · ${line.qty} ${unit.name}")
+        }
+    }
+
+    /** Jual sesuai nominal, mis. minyak Rp7.000. */
+    fun addNominal(product: Product, nominal: Long) {
+        val unit = CartLogic.nominalUnit(product, nominal, -System.nanoTime())
+        if (unit == null) {
+            show("Nominal terlalu kecil untuk ${product.name}")
+            return
+        }
+        applyResult(CartLogic.add(cart, product, unit, 1)) { items ->
+            highlight = Highlight(items.first().key, "${product.name} · ${unit.name}")
+        }
+    }
+
+    fun changeUnit(key: String, unit: SaleUnit) {
+        applyResult(CartLogic.changeUnit(cart, key, unit))
     }
 
     fun clearHighlight(h: Highlight) {
         if (highlight == h) highlight = null
     }
 
-    fun setQty(productId: Long, qty: Int) {
-        when (val r = CartLogic.setQty(cart, productId, qty)) {
-            is CartResult.Ok -> cart = r.items
-            is CartResult.StokKurang ->
-                show("Stok ${r.product.name} hanya ${r.available}")
-        }
+    fun setQty(key: String, qty: Int) {
+        applyResult(CartLogic.setQty(cart, key, qty))
     }
 
     fun clearCart() {
@@ -150,12 +191,29 @@ class TokoViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // ---------- Barang & stok ----------
 
-    fun saveProduct(p: Product, addToCartAfter: Boolean = false, onSuccess: () -> Unit) = launchSafe {
+    /** Barcode yang memicu "tambah barang baru" dari kasir, untuk memilih satuan yang cocok. */
+    private var unknownCodeForAdd: String? = null
+
+    fun saveProduct(
+        p: Product,
+        addToCartAfter: Boolean = false,
+        scannedCode: String? = null,
+        onSuccess: () -> Unit,
+    ) = launchSafe {
+        unknownCodeForAdd = scannedCode
         val saved = io { repo.saveProduct(p) }
         onSuccess()
         products = io { repo.allProducts() }
         show(if (p.id == 0L) "${saved.name} ditambahkan" else "${saved.name} disimpan")
-        if (addToCartAfter) addToCart(saved)
+        if (addToCartAfter) {
+            products.firstOrNull { it.id == saved.id }?.let { fresh ->
+                val code = unknownCodeForAdd
+                val unit = fresh.saleUnits.firstOrNull { code != null && it.barcode == code }
+                    ?: fresh.saleUnits.firstOrNull()
+                if (unit != null) addToCart(fresh, unit)
+            }
+        }
+        unknownCodeForAdd = null
         refreshProducts()
     }
 

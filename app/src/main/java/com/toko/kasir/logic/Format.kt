@@ -23,6 +23,11 @@ object Rupiah {
     fun plain(value: Long): String = format(value).removePrefix("Rp")
 }
 
+object Angka {
+    /** Angka dengan titik ribuan, mis. 2350 -> "2.350". */
+    fun format(value: Int): String = Rupiah.plain(value.toLong())
+}
+
 object Waktu {
     private val locale: Locale = Locale.forLanguageTag("id-ID")
 

@@ -21,20 +21,23 @@ class ReceiptTest {
     private val items = listOf(
         SaleItem("Indomie Goreng Rasa Rendang Spesial Extra Pedas Jumbo", 3_500, 3),
         SaleItem("Aqua 600ml", 4_000, 1),
+        SaleItem("Rokok X", 30_000, 2, "bungkus"),
     )
 
     @Test
     fun semuaBarisMuatDiKertas58mm() {
-        val sale = Sale(12, 0L, 14_500, 20_000, 5_500, 4, PayMethod.TUNAI)
+        val sale = Sale(12, 0L, 74_500, 100_000, 25_500, 6, PayMethod.TUNAI)
         val text = Receipt.build(store, sale, items)
         text.lines().forEach { line ->
             assertTrue("Baris terlalu panjang (${line.length}): '$line'", line.length <= 32)
         }
         assertTrue(text.contains("TOTAL"))
-        assertTrue(text.contains("Rp14.500"))
+        assertTrue(text.contains("Rp74.500"))
         assertTrue(text.contains("Kembali"))
-        assertTrue(text.contains("Rp5.500"))
+        assertTrue(text.contains("Rp25.500"))
         assertTrue(text.contains("10.500"))
+        assertTrue(text.contains("Rokok X (bungkus)"))
+        assertTrue(text.contains("60.000"))
     }
 
     @Test

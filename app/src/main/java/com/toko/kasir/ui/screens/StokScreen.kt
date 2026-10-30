@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -50,8 +51,6 @@ import com.toko.kasir.ui.components.EmptyState
 import com.toko.kasir.ui.components.NumberField
 import com.toko.kasir.ui.components.StatCard
 
-const val LOW_STOCK = 5
-
 private enum class StokFilter(val label: String) { SEMUA("Semua"), MENIPIS("Menipis"), HABIS("Habis") }
 
 @Composable
@@ -63,13 +62,13 @@ fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
     val products = vm.products
 
     val habis = products.count { it.stock <= 0 }
-    val menipis = products.count { it.stock in 1..LOW_STOCK }
+    val menipis = products.count { it.isLow }
     val nilaiStok = products.sumOf { it.cost * it.stock.coerceAtLeast(0) }
     val list = remember(products, filter, query) {
         products.filter {
             it.matches(query) && when (filter) {
                 StokFilter.SEMUA -> true
-                StokFilter.MENIPIS -> it.stock in 1..LOW_STOCK
+                StokFilter.MENIPIS -> it.isLow
                 StokFilter.HABIS -> it.stock <= 0
             }
         }.sortedWith(compareBy<Product> { it.stock }.thenBy { it.name.lowercase() })
@@ -144,8 +143,8 @@ fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             items(list, key = { it.id }) { p ->
                 StockRow(
                     p = p,
-                    onMinus = { vm.adjustStock(p.id, -1) },
-                    onPlus = { vm.adjustStock(p.id, 1) },
+                    onMinus = { vm.adjustStock(p.id, -p.quickStep) },
+                    onPlus = { vm.adjustStock(p.id, p.quickStep) },
                     onRestock = { restock = p },
                 )
                 HorizontalDivider()
@@ -158,7 +157,7 @@ fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             onDismiss = { scanning = false },
             onResult = { code ->
                 scanning = false
-                val found = products.firstOrNull { it.barcode == code }
+                val found = products.firstOrNull { p -> p.barcode == code || p.units.any { it.barcode == code } }
                 if (found != null) restock = found else vm.show("Barcode $code belum terdaftar")
             },
         )
@@ -168,14 +167,14 @@ fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
         RestockDialog(
             product = p,
             onDismiss = { restock = null },
-            onAdd = { qty ->
-                vm.adjustStock(p.id, qty)
-                vm.show("Stok ${p.name} +$qty")
+            onAdd = { baseQty ->
+                vm.adjustStock(p.id, baseQty)
+                vm.show("Stok ${p.name} +${p.stockText(baseQty)}")
                 restock = null
             },
-            onSet = { qty ->
-                vm.setStock(p.id, qty)
-                vm.show("Stok ${p.name} diatur jadi $qty")
+            onSet = { baseQty ->
+                vm.setStock(p.id, baseQty)
+                vm.show("Stok ${p.name} diatur jadi ${p.stockText(baseQty)}")
                 restock = null
             },
         )
@@ -186,7 +185,7 @@ fun StokScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
 private fun StockRow(p: Product, onMinus: () -> Unit, onPlus: () -> Unit, onRestock: () -> Unit) {
     val color = when {
         p.stock <= 0 -> MaterialTheme.colorScheme.error
-        p.stock <= LOW_STOCK -> MaterialTheme.colorScheme.tertiary
+        p.isLow -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.onSurface
     }
     Row(
@@ -198,8 +197,8 @@ private fun StockRow(p: Product, onMinus: () -> Unit, onPlus: () -> Unit, onRest
             Text(
                 when {
                     p.stock <= 0 -> "Habis"
-                    p.stock <= LOW_STOCK -> "Menipis: ${p.stock} ${p.unit}"
-                    else -> "${p.stock} ${p.unit}"
+                    p.isLow -> "Menipis: ${p.stockText()}"
+                    else -> p.stockText()
                 },
                 color = color,
                 fontWeight = FontWeight.SemiBold,
@@ -224,14 +223,21 @@ private fun RestockDialog(
 ) {
     var qtyText by remember { mutableStateOf("") }
     var setMode by remember { mutableStateOf(false) }
+    val units = remember(product) { listOf(product.baseUnit) + product.units.sortedBy { it.factor } }
+    // Default restok pakai satuan terbesar (mis. slop/dus), karena biasanya kulakan dalam jumlah besar.
+    var unit by remember(product) { mutableStateOf(units.last()) }
     val qty = qtyText.toIntOrNull()
+    val baseQty = qty?.let { it * unit.factor }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Restok ${product.name}") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Stok sekarang: ${product.stock} ${product.unit}")
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Stok sekarang: ${product.stockText()}")
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     SegmentedButton(
                         selected = !setMode,
@@ -244,19 +250,37 @@ private fun RestockDialog(
                         shape = SegmentedButtonDefaults.itemShape(1, 2),
                     ) { Text("Atur jadi") }
                 }
+                if (units.size > 1) {
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        units.forEach { u ->
+                            FilterChip(
+                                selected = unit == u,
+                                onClick = { unit = u },
+                                label = { Text(u.name) },
+                            )
+                        }
+                    }
+                }
                 NumberField(
                     qtyText, { qtyText = it },
-                    if (setMode) "Stok baru" else "Jumlah barang masuk",
+                    if (setMode) "Stok baru (${unit.name})" else "Jumlah masuk (${unit.name})",
                 )
-                if (!setMode && qty != null) {
-                    Text("Stok menjadi ${product.stock + qty} ${product.unit}")
+                if (baseQty != null) {
+                    Text(
+                        if (setMode) "Stok menjadi ${product.stockText(baseQty)}"
+                        else "Stok menjadi ${product.stockText(product.stock + baseQty)}",
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                 }
             }
         },
         confirmButton = {
             Button(
-                onClick = { qty?.let { if (setMode) onSet(it) else onAdd(it) } },
-                enabled = qty != null && (setMode || qty > 0),
+                onClick = { baseQty?.let { if (setMode) onSet(it) else onAdd(it) } },
+                enabled = baseQty != null && (setMode || baseQty > 0),
             ) { Text("Simpan") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },

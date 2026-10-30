@@ -34,7 +34,7 @@ object Receipt {
         if (sale.canceled) center("*** DIBATALKAN ***")
         line(divider)
         items.forEach { item ->
-            wrap(item.name, width).forEach(line)
+            wrap(item.label, width).forEach(line)
             lr("  ${item.qty} x ${Rupiah.plain(item.price)}", Rupiah.plain(item.subtotal))
         }
         line(divider)

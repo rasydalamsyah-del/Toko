@@ -123,7 +123,7 @@ fun BarangScreen(vm: TokoViewModel, modifier: Modifier = Modifier) {
             onDismiss = { scanning = false },
             onResult = { code ->
                 scanning = false
-                val found = vm.products.firstOrNull { it.barcode == code }
+                val found = vm.products.firstOrNull { p -> p.barcode == code || p.units.any { it.barcode == code } }
                 if (found != null) editing = found else {
                     query = code
                     vm.show("Barcode $code belum terdaftar")
@@ -145,15 +145,21 @@ private fun ProductRow(p: Product, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
             Text(
-                p.barcode.ifEmpty { "Tanpa barcode" },
+                p.priceText(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                p.barcode.ifEmpty { if (p.units.any { it.barcode.isNotEmpty() }) "Barcode per satuan" else "Tanpa barcode" },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(Rupiah.format(p.price), fontWeight = FontWeight.SemiBold)
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 8.dp)) {
             Text(
-                "Stok ${p.stock} ${p.unit}",
+                "Stok ${p.stockText()}",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (p.stock <= 0) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onSurfaceVariant,
